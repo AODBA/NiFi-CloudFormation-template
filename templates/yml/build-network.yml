@@ -105,7 +105,7 @@ Resources:
   Subnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: us-east-1a
+      AvailabilityZone: !Join ['', [!Ref 'AWS::Region', a]]
       CidrBlock: 10.0.1.0/24
       MapPublicIpOnLaunch: 'true'
       VpcId:
@@ -113,7 +113,7 @@ Resources:
   Subnet2:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: us-east-1b
+      AvailabilityZone: !Join ['', [!Ref 'AWS::Region', b]]
       CidrBlock: 10.0.2.0/24
       MapPublicIpOnLaunch: 'true'
       VpcId:
@@ -121,11 +121,16 @@ Resources:
   Subnet3:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: us-east-1c
+      AvailabilityZone: !Join ['', [!Ref 'AWS::Region', c]]
       CidrBlock: 10.0.3.0/24
       MapPublicIpOnLaunch: 'true'
       VpcId:
         Ref: VPC
+  NiFiPlacementGroup:
+    Type: 'AWS::EC2::PlacementGroup'
+    Properties:
+      Strategy: cluster
+      # Used to deploy instances in the same Placement Group
 Outputs:
   VPCId:
     Description: VPC ID
@@ -155,3 +160,7 @@ Outputs:
     Export:
       Name:
         Fn::Sub: "${AWS::StackName}-Subnet3ID"
+  PlacementGroupName:
+    Description: My Placement Group Name
+    Value:
+      Ref: NiFiPlacementGroup
