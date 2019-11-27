@@ -241,7 +241,7 @@
             "Fn::ImportValue" : {"Fn::Sub": "${InitialStackName}-VPCID" }
           }
         }
-      },
+      }
     },
     "Outputs": {
       "ZooKeeperIPAddresses": {
