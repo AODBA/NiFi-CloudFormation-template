@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploys a NiFi Instance.
+Parameters:
+  InitialStackName:
+    Description: Name of an active CloudFormation stack that contains the initial resources.
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: build-network
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: "AWS::EC2::KeyPair::KeyName"
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  NiFiInstanceType:
+    Description: NiFi EC2 instance type
+    Type: String
+    Default: m5.large
+  NiFiHttpPort:
+    Description: The Port used for HTTP Access (Must be a number)
+    Type: String
+    Default: "8080"
+  NifiVersion:
+    Description: Apache NiFi Version
+    Type: String
+    Default: 1.10.0
+    AllowedValues:
+      - 1.10.0
+      - 1.9.2
+      - 1.9.1
+      - 1.9.0
+      - 1.8.0
+      - 1.7.1
+      - 1.7.0
+  NiFiAMI:
+    Description: Use Latest Amazon ECS-optimized AMIs
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id
+  Location:
+    Description: The IP address range that can be used for NiFi and SSH.
+    Type: String
+    MinLength: "9"
+    MaxLength: "18"
+    Default: 0.0.0.0/0
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+Resources:
+  NiFi1Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      InstanceType: !Ref NiFiInstanceType
+      PlacementGroupName: !ImportValue 
+              'Fn::Sub': '${InitialStackName}-PGRP'
+      SecurityGroupIds:
+        - !Ref NiFiInstanceSecurityGroup
+      KeyName: !Ref KeyName
+      ImageId: !Ref NiFiAMI
+      PrivateIpAddress: 10.0.1.21
+      SubnetId: !ImportValue 
+              'Fn::Sub': '${InitialStackName}-Subnet1ID' # Makes Reference to the Network Stack Name
+      Tags:
+        - Key: Name
+          Value: NiFi 1
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          yum update -y && yum install vim wget java-1.8.0 ntp -y
+          cd /opt/
+          wget https://archive.apache.org/dist/nifi/${NifiVersion}/nifi-${NifiVersion}-bin.tar.gz
+          gunzip -c nifi-${NifiVersion}-bin.tar.gz | tar xvf - 
+          /opt/nifi-${NifiVersion}/bin/nifi.sh install
+          chkconfig nifi on
+          #Set NiFi HTTP Address & Port
+          sed -i "/nifi.web.http.host=/ s/=.*/=10.0.1.21/" ./nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.web.http.port=/ s/=.*/=${NiFiHttpPort}/" ./nifi-${NifiVersion}/conf/nifi.properties
+          #Set Zookeeper Connections
+          sed -i "/nifi.zookeeper.connect.string=/ s/=.*/=10.0.1.15:2181/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.is.node=/ s/=.*/=true/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.node.address=/ s/=.*/=10.0.1.21/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.node.protocol.port=/ s/=.*/=12000/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.state.management.embedded.zookeeper.start=/ s/=.*/=false/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          reboot
+  NiFi2Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      InstanceType: !Ref NiFiInstanceType
+      PlacementGroupName: !ImportValue 
+              'Fn::Sub': '${InitialStackName}-PGRP'
+      SecurityGroupIds:
+        - !Ref NiFiInstanceSecurityGroup
+      KeyName: !Ref KeyName
+      ImageId: !Ref NiFiAMI
+      PrivateIpAddress: 10.0.1.22
+      SubnetId: !ImportValue 
+              'Fn::Sub': '${InitialStackName}-Subnet1ID' # Makes Reference to the Network Stack Name
+      Tags:
+        - Key: Name
+          Value: NiFi 1
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          yum update -y && yum install vim wget java-1.8.0 ntp -y
+          cd /opt/
+          wget https://archive.apache.org/dist/nifi/${NifiVersion}/nifi-${NifiVersion}-bin.tar.gz
+          gunzip -c nifi-${NifiVersion}-bin.tar.gz | tar xvf - 
+          /opt/nifi-${NifiVersion}/bin/nifi.sh install
+          chkconfig nifi on
+
+          #Set NiFi HTTP Address & Port
+          sed -i "/nifi.web.http.host=/ s/=.*/=10.0.1.22/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.web.http.port=/ s/=.*/=${NiFiHttpPort}/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          #Set Zookeeper Connections
+          sed -i "/nifi.zookeeper.connect.string=/ s/=.*/=10.0.1.15:2181/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.is.node=/ s/=.*/=true/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.node.address=/ s/=.*/=10.0.1.22/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.node.protocol.port=/ s/=.*/=12000/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.state.management.embedded.zookeeper.start=/ s/=.*/=false/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+
+          reboot
+  NiFi3Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      InstanceType: !Ref NiFiInstanceType
+      PlacementGroupName: !ImportValue 
+              'Fn::Sub': '${InitialStackName}-PGRP'
+      SecurityGroupIds:
+        - !Ref NiFiInstanceSecurityGroup
+      KeyName: !Ref KeyName
+      ImageId: !Ref NiFiAMI
+      PrivateIpAddress: 10.0.1.23
+      SubnetId: !ImportValue 
+              'Fn::Sub': '${InitialStackName}-Subnet1ID' # Makes Reference to the Network Stack Name
+      Tags:
+        - Key: Name
+          Value: NiFi 1
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          yum update -y && yum install vim wget java-1.8.0 ntp -y
+          cd /opt/
+          wget https://archive.apache.org/dist/nifi/${NifiVersion}/nifi-${NifiVersion}-bin.tar.gz
+          gunzip -c nifi-${NifiVersion}-bin.tar.gz | tar xvf - 
+          /opt/nifi-${NifiVersion}/bin/nifi.sh install
+          chkconfig nifi on
+          
+          #Set NiFi HTTP Address & Port
+          sed -i "/nifi.web.http.host=/ s/=.*/=10.0.1.23/" ./nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.web.http.port=/ s/=.*/=${NiFiHttpPort}/" ./nifi-${NifiVersion}/conf/nifi.properties
+          #Set Zookeeper Connections
+          sed -i "/nifi.zookeeper.connect.string=/ s/=.*/=10.0.1.15:2181/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.is.node=/ s/=.*/=true/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.node.address=/ s/=.*/=10.0.1.23/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.cluster.node.protocol.port=/ s/=.*/=12000/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          sed -i "/nifi.state.management.embedded.zookeeper.start=/ s/=.*/=false/" /opt/nifi-${NifiVersion}/conf/nifi.properties
+          reboot
+  NiFiInstanceSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Group for NiFi instances
+      SecurityGroupIngress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          ToPort: "22"
+          FromPort: "22"
+          CidrIp: !Ref Location
+      VpcId: !ImportValue
+            'Fn::Sub': '${InitialStackName}-VPCID' # Makes Reference to the Network Stack /exported Values Name
+Outputs: {}

@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: test shit 
+Metadata: {}
+Parameters:
+  InitialStackName:
+    Description: Name of an active CloudFormation stack that contains the initial resources.
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: build-network 
+
+Resources:
+  NiFiInstanceSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Group for NiFi instances
+      SecurityGroupIngress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          ToPort: "22"
+          FromPort: "22"
+          CidrIp: !Ref Location
+      VpcId:
+        - {'Fn::ImportValue': !Sub '${InitialStackName}-VPC'}
+
+Outputs:
+  VpcId: !ImportValue 
+      'Fn::Sub': '${AWS::InitialStackName}-VPC'
