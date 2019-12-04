@@ -7,11 +7,19 @@ Parameters:
     MinLength: 1
     MaxLength: 255
     AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
-    Default: build-network
+    Default: nifi-network
   KeyName:
     Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
     Type: "AWS::EC2::KeyPair::KeyName"
     ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  S3BucketName:
+    Description: Name of an existing S3 Bucket, this will hold extra libraries such as jars or customs scripts
+    Type: String
+    Default: ""
+  S3BucketFolder:
+    Description: The Folder Name in the S3 Bucket where extra libraries such as jars or customs scripts are located. If they are the root leave emptry.
+    Type: String
+    Default: ""
   NiFiInstanceType:
     Description: NiFi EC2 instance type
     Type: String
@@ -20,6 +28,18 @@ Parameters:
     Description: The Port used for HTTP Access (Must be a number)
     Type: String
     Default: "8080"
+  NiFiRegistryName:
+    Description: The Port used for HTTP Access (Must be a number)
+    Type: String
+    Default: ""
+  NiFiRegistryDescription:
+    Description: The Port used for HTTP Access (Must be a number)
+    Type: String
+    Default: ""
+  NiFiRegistryURL:
+    Description: The NiFi Registry URL eg (http://ipaddress:port)
+    Type: String
+    Default: ""
   NifiVersion:
     Description: Apache NiFi Version
     Type: String
@@ -45,9 +65,54 @@ Parameters:
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
 Resources:
-  NiFi1Instance:
-    Type: "AWS::EC2::Instance"
+   # Create Role for Policy to access S3 bucket resources
+   NiFiInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      InstanceProfileName: NiFiInstanceProfile
+      Path: /
+      Roles:
+        -  !Ref NiFiS3BucketAccessRole
+   NiFiS3BucketAccessRole:
+    Type: "AWS::IAM::Role"
     Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+    # Create Policy
+   NiFiS3BucketAccessPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: NiFiS3BucketAccessPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${S3BucketName}'
+          - Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:ListBucket
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+            Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+      Roles:
+        - !Ref NiFiS3BucketAccessRole
+   NiFi1Instance:
+    Type: "AWS::EC2::Instance"
+    # CreationPolicy:
+    #     ResourceSignal:
+    #       Timeout: PT30M
+    Properties:
+      IamInstanceProfile: !Ref NiFiInstanceProfile
       InstanceType: !Ref NiFiInstanceType
       SecurityGroupIds:
         - !Ref NiFiInstanceSecurityGroup
@@ -60,19 +125,77 @@ Resources:
         - Key: Name
           Value: NiFi 1
       UserData:
-        Fn::Base64: !Sub |
+        Fn::Base64:
+          !Sub |
           #!/bin/bash -xe
           exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
-          yum update -y && yum install vim wget java-1.8.0 ntp -y
+          yum update -y && yum install aws-cfn-bootstrap jq unzip vim wget java-1.8.0 ntp -y
+          # Install pip & nipyapi
+          yum install python-pip -y && pip install nipyapi 
+          # Install & Setup aws cli
+          pip install awscli --upgrade --user
+          
+          
+          # Install nifi toolkit
           cd /opt/
+          wget http://apache.mirror.serversaustralia.com.au/nifi/${NifiVersion}/nifi-toolkit-${NifiVersion}-bin.tar.gz
+          gunzip -c nifi-toolkit-${NifiVersion}-bin.tar.gz | tar xvf - 
+          
           wget https://archive.apache.org/dist/nifi/${NifiVersion}/nifi-${NifiVersion}-bin.tar.gz
+          # s3://docker-sources/nifi/source/nifi-1.9.2-bin.zip
           gunzip -c nifi-${NifiVersion}-bin.tar.gz | tar xvf - 
           /opt/nifi-${NifiVersion}/bin/nifi.sh install
           chkconfig nifi on
           sed -i "/nifi.web.http.host=/ s/=.*/=10.0.1.20/" ./nifi-${NifiVersion}/conf/nifi.properties
           sed -i "/nifi.web.http.port=/ s/=.*/=${NiFiHttpPort}/" ./nifi-${NifiVersion}/conf/nifi.properties
-          reboot
-  NiFiInstanceSecurityGroup:
+          # Start NiFi
+          service nifi start 
+
+
+
+          # If Registry Client is Needed
+          NiFiRegistryName="${NiFiRegistryName}"
+          NiFiRegistryDescription="${NiFiRegistryDescription}"
+          NiFiRegistryURL="${NiFiRegistryURL}"
+          NiFiHostIp=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+          NiFiHttpPort="${NiFiHttpPort}"
+
+          # wait for Apache NiFi to Start
+          isUp=$(curl -s -XGET http://$NiFiHostIp:$NiFiHttpPort/nifi-api/flow/status | jq '.controllerStatus.activeThreadCount' | wc -l)
+          while [ $isUp -lt 1 ]
+          do
+          sleep 5
+          echo " Apache NiFi is Starting "
+          isUp=$(curl -s -XGET http://$NiFiHostIp:$NiFiHttpPort/nifi-api/flow/status | jq '.controllerStatus.activeThreadCount' | wc -l)
+          done
+          echo " Apache NiFi is Running "
+
+          # If Registry Client is Needed
+          if [ -z "${NiFiRegistryName}" ];  
+          then echo 'No Registry Client Set';
+          else 
+          NiFiHostIp=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+          echo $NiFiHostIp
+          
+          # Generate Curl cmd
+          export addRegistry=$(echo curl --header \"Content-Type: application/json\" --request POST --data \'{\"revision\": {\"version\": 0},\"component\":{\"name\": "\""$NiFiRegistryName"\"",\"description\": "\""$NiFiRegistryDescription"\"",\"uri\": "\""$NiFiRegistryURL"\""}}\' http://$NiFiHostIp:$NiFiHttpPort/nifi-api/controller/registry-clients)
+          
+          # Create executable AddRegistry.sh
+          echo '#/bin/bash' > addRegistry.sh
+          echo $addRegistry >> addRegistry.sh
+          
+          # Make it executable
+          chmod 750 /opt/addRegistry.sh
+          
+          # Add registry entry to NiFi Instance
+          /opt/addRegistry.sh
+          echo 'No Registry Client Set';
+          fi
+          # End Registry
+          # reboot
+          # Wait for the Script to complete and then signal that Stack is complete
+          #/opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource NiFi1Instance --region ${AWS::Region}
+   NiFiInstanceSecurityGroup:
     Type: "AWS::EC2::SecurityGroup"
     Properties:
       GroupDescription: Group for NiFi instances
